@@ -10,13 +10,32 @@ contract FlightSuretyData {
     /********************************************************************************************/
 
     address private contractOwner;                                      // Account used to deploy contract
-    bool private operational = true;                                    // Blocks all state changes throughout the contract if false
+    bool private operational = true;                                    
 
     /********************************************************************************************/
     /*                                       EVENT DEFINITIONS                                  */
     /********************************************************************************************/
 
+    struct Airline {
+        bool isRegistered;
+        bool isFunded;
+        uint256 fundingAmount;
+        uint256 votes;
+    }
 
+    mapping(address => Airline) private airlines;
+    uint256 private airlinesMount = 1;
+
+    address[] private passengers;
+    mapping(address => bool) private isPassenger;
+    mapping(address => mapping(bytes32 => uint256)) private passengerFlightInsurances;
+    mapping(address => uint256) private Balances;
+
+    mapping(address => bool) private authorizedCallers;
+
+    uint256 public constant AIRLINE_REGISTRATION_COST = 10 ether;
+
+    uint256 public constant MAX_INSURANCE_AMOUNT = 1 ether;
     /**
     * @dev Constructor
     *      The deploying account becomes contractOwner
@@ -26,6 +45,12 @@ contract FlightSuretyData {
                                 ) 
                                 public 
     {
+        airlines[msg.sender] = Airline({
+            isRegistered: true,
+            isFunded: true,
+            fundingAmount: AIRLINE_REGISTRATION_COST,
+            votes: 0
+        });
         contractOwner = msg.sender;
     }
 
@@ -53,6 +78,14 @@ contract FlightSuretyData {
     modifier requireContractOwner()
     {
         require(msg.sender == contractOwner, "Caller is not contract owner");
+        _;
+    }
+    
+    modifier requireCallerIsRegisteredAirline() {
+        require(
+            airlines[tx.origin].isRegistered,
+            "You are not permission to perform this operation"
+        );
         _;
     }
 
@@ -92,6 +125,10 @@ contract FlightSuretyData {
     /********************************************************************************************/
     /*                                     SMART CONTRACT FUNCTIONS                             */
     /********************************************************************************************/
+    
+    function isAirline(address airlineAddress) public view returns (bool) {
+        return airlines[airlineAddress].isRegistered;
+    }
 
    /**
     * @dev Add an airline to the registration queue
@@ -99,11 +136,39 @@ contract FlightSuretyData {
     *
     */   
     function registerAirline
-                            (   
+                            ( 
+                                address airline,
+                                string flight,
+                                uint256 timestamp  
                             )
+                            requireIsOperational
+                            requireCallerIsRegisteredAirline
                             external
                             pure
     {
+         require(
+            airlines[tx.origin].isFunded,
+            "In order to register airline that let's fund at least 10 ETH for this operation"
+        );
+        require(
+            !airlines[airlineAddress].isRegistered,
+            "Airline has been existed"
+        );
+
+        if (airlinesMount < MULTIPARTY_CONSENSUS) {
+            airlines[airlineAddress] = Airline(true, false, 0, 0);
+            airlinesMount = airlinesMount.add(1);
+            return (true, 0);
+        }
+
+        airlines[airlineAddress].votes = airlines[airlineAddress].votes.add(1);
+        if (airlines[airlineAddress].votes.mul(2) >= airlinesMount) {
+            airlines[airlineAddress].isRegistered = true;
+            airlinesMount = airlinesMount.add(1);
+            return (true, airlines[airlineAddress].votes);
+        }
+
+        return (false, airlines[airlineAddress].votes);
     }
 
 
@@ -112,11 +177,33 @@ contract FlightSuretyData {
     *
     */   
     function buy
-                            (                             
+                            (   
+                                address airline,
+                                string flight,
+                                uint256 timestamp                          
                             )
                             external
+                            requireIsOperational
                             payable
     {
+         require(msg.sender == tx.origin, "Contracts is not allowed");
+        require(msg.value > 0, 'your value is not enough that needs to pay for flight insurance');
+
+        if(!checkIfContains(msg.sender)){
+            passengerAddresses.push(msg.sender);
+        }
+        if (passengers[msg.sender].passengerWallet != msg.sender) {
+            passengers[msg.sender] = Passenger({
+                                                passengerWallet: msg.sender,
+                                                credit: 0
+                                        });
+            passengers[msg.sender].boughtFlight[flightCode] = msg.value;
+        } else {
+            passengers[msg.sender].boughtFlight[flightCode] = msg.value;
+        }
+        if (msg.value > MAX_INSURANCE_AMOUNT) {
+            msg.sender.transfer(msg.value.sub(MAX_INSURANCE_AMOUNT));
+        }
 
     }
 
@@ -125,10 +212,36 @@ contract FlightSuretyData {
     */
     function creditInsurees
                                 (
+                                    address airline,
+                                    string flight,
+                                     uint256 timestamp
                                 )
                                 external
+                                requireIsOperational
+                                requireContractOwner
                                 pure
     {
+        require(
+            !airlines[msg.sender].isRegistered,
+            "An airline can not purchase insurance"
+        );
+
+        if (!isPassenger[msg.sender]) {
+            isPassenger[msg.sender] = true;
+            passengers.push(msg.sender);
+        }
+
+        bytes32 flightKey = getFlightKey(airline, flight, timestamp);
+        uint256 totalAmount = passengerFlightInsurances[msg.sender][flightKey]
+            .add(msg.value);
+        require(
+            totalAmount <= MAX_INSURANCE_AMOUNT,
+            "You can not purchase because your total is more than 1 ether"
+        );
+
+        passengerFlightInsurances[msg.sender][
+            flightKey
+        ] = passengerFlightInsurances[msg.sender][flightKey].add(msg.value);
     }
     
 
@@ -142,6 +255,13 @@ contract FlightSuretyData {
                             external
                             pure
     {
+        require(
+            Balances[msg.sender] > 0,
+            "You have no balance to withdraw"
+        );
+        uint256 balance = Balances[msg.sender];
+        Balances[msg.sender] = 0;
+        msg.sender.transfer(balance);
     }
 
    /**
@@ -153,8 +273,15 @@ contract FlightSuretyData {
                             (   
                             )
                             public
+                            requireCallerIsRegisteredAirline
                             payable
     {
+        airlines[msg.sender].fundingAmount = airlines[msg.sender]
+            .fundingAmount
+            .add(msg.value);
+        if (airlines[msg.sender].fundingAmount >= AIRLINE_REGISTRATION_COST) {
+            airlines[msg.sender].isFunded = true;
+        }
     }
 
     function getFlightKey

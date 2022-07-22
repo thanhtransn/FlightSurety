@@ -6,6 +6,9 @@ pragma solidity ^0.4.25;
 
 import "../node_modules/openzeppelin-solidity/contracts/math/SafeMath.sol";
 
+
+
+
 /************************************************** */
 /* FlightSurety Smart Contract                      */
 /************************************************** */
@@ -16,6 +19,8 @@ contract FlightSuretyApp {
     /*                                       DATA VARIABLES                                     */
     /********************************************************************************************/
 
+    FlightSuretyData private flightSuretyData;
+
     // Flight status codees
     uint8 private constant STATUS_CODE_UNKNOWN = 0;
     uint8 private constant STATUS_CODE_ON_TIME = 10;
@@ -25,7 +30,8 @@ contract FlightSuretyApp {
     uint8 private constant STATUS_CODE_LATE_OTHER = 50;
 
     address private contractOwner;          // Account used to deploy contract
-
+    uint256 public constant AirlineRegistrationFee = 10 ether;
+    
     struct Flight {
         bool isRegistered;
         uint8 statusCode;
@@ -50,7 +56,7 @@ contract FlightSuretyApp {
     modifier requireIsOperational() 
     {
          // Modify to call data contract's status
-        require(true, "Contract is currently not operational");  
+        require(flightSuretyData.isOperational(), "Contract is currently not operational");  
         _;  // All modifiers require an "_" which indicates where the function body will be added
     }
 
@@ -73,10 +79,12 @@ contract FlightSuretyApp {
     */
     constructor
                                 (
+                                    address Contract
                                 ) 
                                 public 
     {
         contractOwner = msg.sender;
+        flightSuretyData = flightSuretyData(Contract);
     }
 
     /********************************************************************************************/
@@ -88,7 +96,7 @@ contract FlightSuretyApp {
                             pure 
                             returns(bool) 
     {
-        return true;  // Modify to call data contract's status
+        return flightSuretyData.isOperational(); // Modify to call data contract's status
     }
 
     /********************************************************************************************/
@@ -102,12 +110,18 @@ contract FlightSuretyApp {
     */   
     function registerAirline
                             (   
+                                address airline
                             )
                             external
+                            requireIsOperational
                             pure
                             returns(bool success, uint256 votes)
     {
-        return (success, 0);
+        require(!flightSuretyData.getAirlineStatus(airline), "Airline is already registered");
+        address[] memory arrayRegisteredAirlines = flightSuretyData.getRegisteredAirlines();
+        if(arrayRegisteredAirlines.length < 4) {
+            return flightSuretyData.registerAirline(airline);
+        }
     }
 
 
@@ -117,11 +131,15 @@ contract FlightSuretyApp {
     */  
     function registerFlight
                                 (
+                                   address airline, string flightNumber, uint256 timestamp
                                 )
                                 external
+                                requireIsOperational
                                 pure
     {
-
+        bytes32 flightKey = getFlightKey(airline, flight, timestamp);
+        require(!flights[flightKey].isRegistered, "This flight has already been registered");
+        flights[flightKey] = Flight( true, STATUS_CODE_UNKNOWN, timestamp, airline );
     }
     
    /**
@@ -138,6 +156,9 @@ contract FlightSuretyApp {
                                 internal
                                 pure
     {
+        bytes32 flightKey = getFlightKey(airline, flight, timestamp);
+        require(flights[flightKey].isRegistered, "Flight is not existed");
+        flightSuretyData.getFlightStatus(airline, flight, timestamp, statusCode);
     }
 
 
@@ -335,3 +356,12 @@ contract FlightSuretyApp {
 // endregion
 
 }   
+
+
+contract FlightSuretyData {
+    function registerAirline(address) external returns (bool, uint256);
+    function getAirlineStatus(address airline ) external view returns (bool);
+    function getRegisteredAirlines() external view returns(address[] memory);
+    function isOperational() external view returns (bool);
+    function getFlightStatus(address airline, string calldata flight, uint256 timestamp, uint8 statusCode) external;
+}
